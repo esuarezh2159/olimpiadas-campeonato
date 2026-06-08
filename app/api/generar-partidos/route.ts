@@ -128,7 +128,7 @@ export async function POST(request: NextRequest) {
       JOIN TblSeries s ON ed.serie_id = s.id
       JOIN TblDisciplina d ON ed.disciplina_id = d.id
       WHERE ed.disciplina_id = ? AND e.activa = TRUE AND ed.serie_id IN (${placeholders})
-      ORDER BY ed.serie_id, e.nombre`,
+      ORDER BY ed.serie_id`,
       [disciplinaId, ...seriesIds]
     );
 
@@ -198,15 +198,21 @@ export async function POST(request: NextRequest) {
     let equiposDuplicadosSkipped = 0;
     let conflictosPrevenidos = 0;
 
+    console.log(`🔍 INICIANDO GENERACIÓN DE ${disciplinaNombre} - DISCIPLINA ID: ${disciplinaId}`);
+    console.log(`📊 Total de equipos obtenidos de BD: ${equipos.length}`);
+
     // Usar for...of en lugar de forEach para permitir await
     for (const [serieId, equiposEnSerie] of seriesMap.entries()) {
       const serieName = serieNamesMap.get(serieId) || '';
+      
+      console.log(`\n📍 SERIE: ${serieName} (ID: ${serieId})`);
+      console.log(`   Equipos ANTES de shuffle: [${equiposEnSerie.map(e => e.nombre).join(', ')}]`);
       
       // Hacer shuffle de los equipos SIEMPRE para generar matchups aleatorios
       // Nota: Para Basquetbol, el sistema buscará estos matchups exactos en BD después
       const equiposMezclados = shuffleArray(equiposEnSerie);
       
-      console.log(`📌 ${disciplinaNombre} - ${serieName}: Equipos mezclados = [${equiposMezclados.map(e => e.nombre).join(', ')}]`);
+      console.log(`   Equipos DESPUÉS de shuffle: [${equiposMezclados.map(e => e.nombre).join(', ')}]`);
 
       if (tipoCompeticion === 'puntos') {
         // Para puntos, cada equipo es un "turno" individual
