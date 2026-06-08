@@ -152,9 +152,22 @@ export function PartidosSection() {
 
     try {
       // Generar partidos para TODAS las disciplinas seleccionadas
+      // IMPORTANTE: Procesar Futbito PRIMERO para que Basquetbol pueda leer sus matchups
+      let disciplinasOrdenadas = Array.from(selectedDisciplinaIds);
+      disciplinasOrdenadas.sort((a, b) => {
+        // Obtener nombres de disciplinas
+        const discA = disciplinas.find(d => d.id === a);
+        const discB = disciplinas.find(d => d.id === b);
+        
+        // Futbito primero (id anterior/prioridad)
+        if (discA?.nombre === 'Futbito' && discB?.nombre !== 'Futbito') return -1;
+        if (discA?.nombre !== 'Futbito' && discB?.nombre === 'Futbito') return 1;
+        return 0;
+      });
+
       let todosLosPartidos: any[] = [];
 
-      for (const disciplinaId of Array.from(selectedDisciplinaIds)) {
+      for (const disciplinaId of disciplinasOrdenadas) {
         const response = await fetch('/api/generar-partidos', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
