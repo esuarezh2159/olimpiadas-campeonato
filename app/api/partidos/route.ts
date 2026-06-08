@@ -61,6 +61,20 @@ export async function GET(request: NextRequest) {
 
     const [results] = await connection.query(query, params);
 
+    // Si se solicita orden aleatorio, hacer shuffle de los resultados
+    const randomOrder = searchParams.get('randomOrder') === 'true';
+    if (randomOrder && Array.isArray(results)) {
+      const shuffled = [...results];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      return NextResponse.json({
+        success: true,
+        data: shuffled,
+      });
+    }
+
     return NextResponse.json({
       success: true,
       data: results,

@@ -228,8 +228,8 @@ export function PartidosSection() {
         setShowEquiposSueltosModal(true);
       }
 
-      // Recargar la tabla de partidos
-      const refreshResponse = await fetch('/api/partidos');
+      // Recargar la tabla de partidos CON ORDEN ALEATORIO
+      const refreshResponse = await fetch('/api/partidos?randomOrder=true');
       const refreshData = await refreshResponse.json();
       if (refreshData.success) {
         setPartidosDB(refreshData.data || []);

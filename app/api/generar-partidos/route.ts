@@ -439,10 +439,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // NUEVO: Aplicar horarios escalonados para otros disciplinas (chocolateo)
-    // NOTA: Este codigo estaba aqui pero no hace nada productivo - se maneja en aplicar-chocolateo
-    // Lo removemos para evitar interferencias
-    
     // Guardar los partidos en la base de datos
     for (const partido of partidos) {
       const horaPartido = partido.horario ? `${partido.horario}:00` : null;
