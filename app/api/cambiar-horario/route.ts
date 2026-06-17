@@ -37,7 +37,7 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    const partido = partidoActual[0];
+    const partido = partidoActual[0] as any;
 
     // Validar que el nuevo horario no tenga conflicto con otros partidos del mismo equipo
     const [conflictosEq1] = await connection.query(
@@ -47,7 +47,7 @@ export async function PUT(request: NextRequest) {
          AND horario_inicio = ?
          AND (equipo1_id = ? OR equipo2_id = ?)`,
       [partido.fecha_id, partidoId, nuevoHorario, partido.equipo1_id, partido.equipo1_id]
-    );
+    ) as any;
 
     const [conflictosEq2] = await connection.query(
       `SELECT COUNT(*) as count FROM TblPartido
@@ -56,7 +56,7 @@ export async function PUT(request: NextRequest) {
          AND horario_inicio = ?
          AND (equipo1_id = ? OR equipo2_id = ?)`,
       [partido.fecha_id, partidoId, nuevoHorario, partido.equipo2_id, partido.equipo2_id]
-    );
+    ) as any;
 
     const hasConflictoEq1 = Array.isArray(conflictosEq1) && conflictosEq1[0].count > 0;
     const hasConflictoEq2 = Array.isArray(conflictosEq2) && conflictosEq2[0].count > 0;

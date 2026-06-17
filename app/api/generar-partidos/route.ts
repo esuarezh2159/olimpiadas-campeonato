@@ -65,36 +65,83 @@ export async function POST(request: NextRequest) {
 
     // Obtener información de la fecha actual para saber si es Apertura o Clausura
     const [fechaResult] = await connection.query(
-      `SELECT tipo FROM TblFecha WHERE id = ?`,
+      `SELECT tipo, id FROM TblFecha WHERE id = ?`,
       [fechaId]
     );
     const fechaData = Array.isArray(fechaResult) ? fechaResult[0] : null;
-    const tipoFecha = fechaData?.tipo || 'Apertura'; // Apertura o Clausura
+    const tipoFecha = (fechaData?.tipo || 'Apertura').trim(); // Apertura o Clausura
 
-    // Si es Clausura, obtener todos los vs que se jugaron en Apertura
-    const vsAperturaProhibidos = new Set<string>();
+    console.log(`\n📅 TIPO DE FECHA DETECTADO:`);
+    console.log(`   fechaData: ${JSON.stringify(fechaData)}`);
+    console.log(`   tipoFecha raw: '${fechaData?.tipo}'`);
+    console.log(`   tipoFecha trimmed: '${tipoFecha}'`);
+    console.log(`   tipoFecha.toLowerCase(): '${tipoFecha.toLowerCase()}'`);
+    console.log(`   ¿Es Apertura?: ${tipoFecha.toLowerCase() === 'apertura'}`);
+
+    // Obtener todas las fechas para mapeo Apertura ↔ Clausura
+    const [todasLasFechas] = await connection.query(`
+      SELECT id, tipo, nombre
+      FROM TblFecha
+      ORDER BY id ASC
+    `);
+
+    let fechasApertura: any[] = [];
+    let fechasClausura: any[] = [];
     
-    if (tipoFecha === 'Clausura') {
-      const [vsAperturaResult] = await connection.query(`
-        SELECT DISTINCT 
-          LEAST(p.equipo1_id, p.equipo2_id) as equipo_menor,
-          GREATEST(p.equipo1_id, p.equipo2_id) as equipo_mayor
-        FROM TblPartido p
-        JOIN TblFecha f ON p.fecha_id = f.id
-        WHERE f.tipo = 'Apertura'
-        AND p.disciplina_id = ?
-        AND p.equipo1_id != p.equipo2_id
-      `, [disciplinaId]);
+    // Manejar posible estructura anidada de MySQL
+    let fechasParaProcesar = todasLasFechas;
+    if (Array.isArray(todasLasFechas) && Array.isArray(todasLasFechas[0])) {
+      fechasParaProcesar = todasLasFechas[0];
+    }
+    
+    if (Array.isArray(fechasParaProcesar)) {
+      fechasParaProcesar.forEach((f: any) => {
+        const tipoLower = (f.tipo || '').toString().toLowerCase().trim();
+        if (tipoLower === 'apertura') {
+          fechasApertura.push({...f, id: Number(f.id)});
+        } else if (tipoLower === 'clausura') {
+          fechasClausura.push({...f, id: Number(f.id)});
+        }
+      });
+    }
 
-      if (Array.isArray(vsAperturaResult)) {
-        vsAperturaResult.forEach((row: any) => {
-          // Guardar como "equipoMenor-equipoMayor" para comparación fácil
-          vsAperturaProhibidos.add(`${row.equipo_menor}-${row.equipo_mayor}`);
-        });
+    console.log(`📊 Fechas cargadas: ${fechasApertura.length} Apertura, ${fechasClausura.length} Clausura`);
+    console.log(`   Apertura: ${fechasApertura.map(f => `${f.id}(${f.nombre})`).join(', ')}`);
+    console.log(`   Clausura: ${fechasClausura.map(f => `${f.id}(${f.nombre})`).join(', ')}`);
+
+    // Función simple para obtener fecha equivalente
+    const obtenerFechaEquivalente = (idFecha: number, tipo: string): any => {
+      const tipoLower = (tipo || '').toString().toLowerCase().trim();
+      const idBuscar = Number(idFecha);
+      
+      if (tipoLower === 'apertura') {
+        // Si es Apertura, la Clausura equivalente está en posición del índice
+        const indexApertura = fechasApertura.findIndex(f => Number(f.id) === idBuscar);
+        
+        if (indexApertura >= 0 && indexApertura < fechasClausura.length) {
+          const resultado = fechasClausura[indexApertura];
+          console.log(`🔗 Apertura ${idBuscar} → Clausura ${resultado.id} (índice ${indexApertura})`);
+          return resultado;
+        } else {
+          console.log(`🔗 NO encontrada Clausura para Apertura ${idBuscar}`);
+        }
+      } else if (tipoLower === 'clausura') {
+        // Si es Clausura, buscar Apertura
+        const indexClausura = fechasClausura.findIndex(f => Number(f.id) === idBuscar);
+        
+        if (indexClausura >= 0 && indexClausura < fechasApertura.length) {
+          const resultado = fechasApertura[indexClausura];
+          console.log(`🔗 Clausura ${idBuscar} → Apertura ${resultado.id} (índice ${indexClausura})`);
+          return resultado;
+        } else {
+          console.log(`🔗 NO encontrada Apertura para Clausura ${idBuscar}`);
+        }
       }
       
-      console.log(`VS prohibidos en Clausura (ya jugaron en Apertura): ${vsAperturaProhibidos.size}`);
-    }
+      return null;
+    };
+
+    console.log(`📊 Mapeando fechas: ${fechasApertura.length} Apertura(s), ${fechasClausura.length} Clausura(s)`);
 
     // Primero, eliminar SOLO los partidos de las series seleccionadas en esta disciplina y fecha
     const seriesPlaceholders = seriesIds.map(() => '?').join(',');
@@ -109,8 +156,18 @@ export async function POST(request: NextRequest) {
       [disciplinaId]
     );
     const disciplinaData = Array.isArray(disciplinaResult) ? disciplinaResult[0] : null;
-    const tipoCompeticion = disciplinaData?.tipo_competicion || 'vs';
+    let tipoCompeticion = disciplinaData?.tipo_competicion || 'vs';
     const disciplinaNombre = disciplinaData?.nombre || 'Unknown';
+
+    // Disciplinas individuales: Atletismo, Billar, Cubilete, Inauguración, Natación, Tiro al Sapo
+    const disciplinasIndividuales = ['atletismo', 'billar', 'cubilete', 'inauguracion', 'natacion', 'tiro al sapo'];
+    const esIndividual = disciplinasIndividuales.some(d => disciplinaNombre.toLowerCase().includes(d));
+    
+    // Si es individual, forzar tipo_competicion como 'puntos' para generar partidos individuales
+    if (esIndividual) {
+      tipoCompeticion = 'puntos';
+      console.log(`📌 Disciplina individual detectada: ${disciplinaNombre} - Forzando tipo_competicion='puntos'`);
+    }
 
     // Obtener todos los equipos en esta disciplina agrupados por serie (SOLO LAS SELECCIONADAS)
     const placeholders = seriesIds.map(() => '?').join(',');
@@ -165,6 +222,26 @@ export async function POST(request: NextRequest) {
       sitiosParaUsar = Array.isArray(sitiosResult) ? (sitiosResult as Sitio[]) : [];
     }
 
+    // Obtener equipos en AMBAS disciplinas (Futbito y Basquetbol)
+    const [equiposEnAmbasDisciplinasResult] = await connection.query(`
+      SELECT DISTINCT ed1.equipo_id
+      FROM TblEquipoDisciplina ed1
+      JOIN TblEquipoDisciplina ed2 ON ed1.equipo_id = ed2.equipo_id
+      JOIN TblDisciplina d1 ON ed1.disciplina_id = d1.id
+      JOIN TblDisciplina d2 ON ed2.disciplina_id = d2.id
+      WHERE LOWER(d1.nombre) = 'fulbito' AND LOWER(d2.nombre) = 'basquetbol'
+        AND ed1.serie_id = ed2.serie_id
+    `);
+    
+    const equiposEnAmbasDisciplinas = new Set<number>();
+    if (Array.isArray(equiposEnAmbasDisciplinasResult)) {
+      equiposEnAmbasDisciplinasResult.forEach((row: any) => {
+        equiposEnAmbasDisciplinas.add(row.equipo_id);
+      });
+    }
+    
+    console.log(`📋 Equipos en AMBAS disciplinas (Futbito + Basquetbol): ${equiposEnAmbasDisciplinas.size}`);
+
     // Agrupar equipos por serie
     const seriesMap = new Map<number, Equipo[]>();
     const serieNamesMap = new Map<number, string>();
@@ -190,38 +267,84 @@ export async function POST(request: NextRequest) {
       return shuffled;
     };
 
+    // Helper function para separar equipos en ambas disciplinas vs sueltos
+    const separarEquipos = (equiposEnSerie: Equipo[]): { enAmbas: Equipo[]; sueltos: Equipo[] } => {
+      const enAmbas: Equipo[] = [];
+      const sueltos: Equipo[] = [];
+      
+      equiposEnSerie.forEach(eq => {
+        if (equiposEnAmbasDisciplinas.has(eq.id)) {
+          enAmbas.push(eq);
+        } else {
+          sueltos.push(eq);
+        }
+      });
+      
+      return { enAmbas, sueltos };
+    };
+
     // Generar partidos (Chocolate) para cada serie con horarios escalonados
     const partidos: Partido[] = [];
     const matchCountPerSitio = new Map<number, number>();
     const equiposPorHorario = new Map<string, Set<number>>(); // Track equipo_id por horario
-    let vsSkipped = 0;
     let equiposDuplicadosSkipped = 0;
     let conflictosPrevenidos = 0;
 
     console.log(`🔍 INICIANDO GENERACIÓN DE ${disciplinaNombre} - DISCIPLINA ID: ${disciplinaId}`);
     console.log(`📊 Total de equipos obtenidos de BD: ${equipos.length}`);
+    console.log(`📊 Es Futbito? ${disciplinaNombre.toLowerCase() === 'fulbito'} | Es Basquetbol? ${disciplinaNombre.toLowerCase() === 'basquetbol'}`);
 
     // Usar for...of en lugar de forEach para permitir await
     for (const [serieId, equiposEnSerie] of seriesMap.entries()) {
       const serieName = serieNamesMap.get(serieId) || '';
       
       console.log(`\n📍 SERIE: ${serieName} (ID: ${serieId})`);
-      console.log(`   Equipos ANTES de shuffle: [${equiposEnSerie.map(e => e.nombre).join(', ')}]`);
+      console.log(`   ANTES shuffle: [${equiposEnSerie.map(e => e.id).join(', ')}]`);
       
-      // Hacer shuffle de los equipos SIEMPRE para generar matchups aleatorios
-      // Nota: Para Basquetbol, el sistema buscará estos matchups exactos en BD después
-      const equiposMezclados = shuffleArray(equiposEnSerie);
+      // Determinar si hacer shuffle basado en la disciplina
+      let equiposMezclados: Equipo[];
       
-      console.log(`   Equipos DESPUÉS de shuffle: [${equiposMezclados.map(e => e.nombre).join(', ')}]`);
+      if (disciplinaNombre.toLowerCase() === 'fulbito') {
+        // FUTBITO: Separar equipos en ambas disciplinas vs sueltos
+        const { enAmbas, sueltos } = separarEquipos(equiposEnSerie);
+        
+        console.log(`   📊 Equipos en AMBAS disciplinas: [${enAmbas.map(e => e.id).join(', ')}]`);
+        console.log(`   📊 Equipos SUELTOS (solo en Futbito): [${sueltos.map(e => e.id).join(', ')}]`);
+        
+        // Barajear equipos en ambas disciplinas primero
+        const enAmbasMezclados = shuffleArray(enAmbas);
+        const sueltosMezclados = shuffleArray(sueltos);
+        
+        // Combinar: primero los de ambas disciplinas, luego los sueltos
+        equiposMezclados = [...enAmbasMezclados, ...sueltosMezclados];
+        
+        console.log(`   ✅ Barajando equipos para Futbito (primero en ambas, luego sueltos)`);
+        console.log(`   DESPUÉS shuffle: [${equiposMezclados.map(e => e.id).join(', ')}]`);
+      } else if (disciplinaNombre.toLowerCase() === 'basquetbol') {
+        // BASQUETBOL: NO hacer shuffle, usar orden original
+        equiposMezclados = equiposEnSerie;
+        console.log(`   ⚠️ NO barajando para Basquetbol - usará matchups de Fulbito barajado`);
+        console.log(`   SIN shuffle (fulbito): [${equiposMezclados.map(e => e.id).join(', ')}]`);
+      } else {
+        // Otras disciplinas: separar y barajear como Futbito
+        const { enAmbas, sueltos } = separarEquipos(equiposEnSerie);
+        const enAmbasMezclados = shuffleArray(enAmbas);
+        const sueltosMezclados = shuffleArray(sueltos);
+        equiposMezclados = [...enAmbasMezclados, ...sueltosMezclados];
+        
+        console.log(`   ✅ Barajando equipos (primero en ambas, luego sueltos)`);
+        console.log(`   DESPUÉS shuffle: [${equiposMezclados.map(e => e.id).join(', ')}]`);
+      }
+
+      // Declarar matchupsAGenerar al inicio para que esté disponible en todo el scope de la serie
+      let matchupsAGenerar: Array<{ eq1: Equipo; eq2: Equipo; horarioFutbol?: string; sitioFutbolId?: number }> = [];
 
       if (tipoCompeticion === 'puntos') {
-        // Para puntos, cada equipo es un "turno" individual
+        // Para puntos, cada equipo es un "turno" individual, escalonado cada 45 minutos
+        let horarioActual = sitiosParaUsar.length > 0 ? sitiosParaUsar[0].horario_inicio : '08:00';
+        
         for (let i = 0; i < equiposMezclados.length; i++) {
-          const sitioIndex = i % (sitiosParaUsar.length > 0 ? sitiosParaUsar.length : 1);
-          const sitio = sitiosParaUsar[sitioIndex];
-          const horarioInicio = sitio ? sitio.horario_inicio : '08:00';
-          
-          const horarioKey = `${horarioInicio}`;
+          const horarioKey = `${horarioActual}`;
           if (!equiposPorHorario.has(horarioKey)) {
             equiposPorHorario.set(horarioKey, new Set());
           }
@@ -236,32 +359,224 @@ export async function POST(request: NextRequest) {
             serie_nombre: serieName,
             fecha_id: fechaId,
             disciplina_id: disciplinaId,
-            sitio_id: sitio?.id,
-            sitio_nombre: sitio?.nombre,
-            horario: horarioInicio,
+            sitio_id: sitiosParaUsar.length > 0 ? sitiosParaUsar[0].id : undefined,
+            sitio_nombre: sitiosParaUsar.length > 0 ? sitiosParaUsar[0].nombre : undefined,
+            horario: horarioActual,
+          });
+          
+          // Escalonar 45 minutos para el siguiente turno individual
+          horarioActual = addMinutesToTime(horarioActual, 45);
+        }
+      } else if (disciplinaNombre.toLowerCase() === 'basquetbol') {
+        // BASQUETBOL CON MATCHUPS DE FUTBITO: Recuperar TODOS los matchups de Futbito
+        console.log(`🏀 BASQUETBOL: Recuperando TODOS los matchups de Futbito desde BD para la serie ${serieName}...`);
+
+        // Obtener TODOS los partidos de Futbito para esta serie en esta fecha
+        const [futbolPartidos] = await connection.query(
+          `SELECT p.equipo1_id, p.equipo2_id, p.sitio_id, TIME_FORMAT(p.horario_inicio, '%H:%i') as horario_futbol
+          FROM TblPartido p
+          JOIN TblDisciplina d ON p.disciplina_id = d.id
+          WHERE p.fecha_id = ? 
+            AND p.serie_id = ?
+            AND LOWER(d.nombre) = 'fulbito'
+            AND p.equipo1_id != p.equipo2_id
+          ORDER BY p.horario_inicio`,
+          [fechaId, serieId]
+        );
+
+        if (Array.isArray(futbolPartidos) && futbolPartidos.length > 0) {
+          console.log(`✓ Se recuperaron ${futbolPartidos.length} matchups de Futbito`);
+          
+          for (const futbolMatchup of futbolPartidos) {
+            const eq1Id = futbolMatchup.equipo1_id;
+            const eq2Id = futbolMatchup.equipo2_id;
+            const horarioFutbol = futbolMatchup.horario_futbol;
+            const sitioFutbolId = futbolMatchup.sitio_id;
+            
+            console.log(`📍 Verificando matchup: ${eq1Id} vs ${eq2Id}...`);
+            
+            // Buscar si ambos equipos existen en Basquetbol
+            const eq1Basquet = equiposMezclados.find(e => e.id === eq1Id);
+            const eq2Basquet = equiposMezclados.find(e => e.id === eq2Id);
+            
+            if (eq1Basquet && eq2Basquet) {
+              // Ambos equipos existen - agregar al matchup
+              matchupsAGenerar.push({
+                eq1: eq1Basquet,
+                eq2: eq2Basquet,
+                horarioFutbol: horarioFutbol,
+                sitioFutbolId: sitioFutbolId,
+              });
+              console.log(`✓ Matchup encontrado: ${eq1Basquet.id} vs ${eq2Basquet.id}`);
+            } else {
+              const equipoFaltante = !eq1Basquet ? eq1Id : eq2Id;
+              console.log(`⚠ Matchup NO encontrado en equipos de Basquetbol: ${eq1Id} vs ${eq2Id}`);
+            }
+          }
+        } else {
+          console.log(`⚠ NO se encontraron partidos de Futbito para esta serie`);
+          console.log(`💡 FALLBACK: Generando matchups de Basquetbol independientemente...`);
+          
+          // Fallback: Si no hay partidos de Futbito, generar Basquetbol como una disciplina VS normal
+          // (Pero el usuario debe generar Futbito primero!)
+          let matchCount = Math.floor(equiposMezclados.length / 2);
+          for (let i = 0; i < matchCount; i++) {
+            matchupsAGenerar.push({
+              eq1: equiposMezclados[i * 2],
+              eq2: equiposMezclados[i * 2 + 1],
+              horarioFutbol: undefined,
+            });
+          }
+          
+          console.log(`📌 Se generaron ${matchupsAGenerar.length} matchups de Basquetbol (sin horarios de Futbito)`);
+          console.log(`⚠️ AVISO: Para mejor escalonamiento, genera Futbito primero`);
+        }
+        
+        // AHORA generar los partidos de Basquetbol usando los matchups recuperados
+        console.log(`🔗 Usando ${matchupsAGenerar.length} matchups para Basquetbol...`);
+        
+        for (let i = 0; i < matchupsAGenerar.length; i++) {
+          const matchup = matchupsAGenerar[i];
+          
+          // Usar el sitio de Futbito si está disponible, sino usar el sitio especificado para Basquetbol
+          let sitio = null;
+          if (matchup.sitioFutbolId && sitiosParaUsar.length > 0) {
+            sitio = sitiosParaUsar.find(s => s.id === matchup.sitioFutbolId);
+          }
+          if (!sitio && sitiosParaUsar.length > 0) {
+            sitio = sitiosParaUsar[0];
+          }
+          
+          if (!sitio) {
+            partidos.push({
+              equipo1_id: matchup.eq1.id,
+              equipo1_nombre: matchup.eq1.nombre,
+              equipo2_id: matchup.eq2.id,
+              equipo2_nombre: matchup.eq2.nombre,
+              serie_id: serieId,
+              serie_nombre: serieName,
+              fecha_id: fechaId,
+              disciplina_id: disciplinaId,
+              sitio_id: undefined,
+              sitio_nombre: undefined,
+              horario: '08:00',
+            });
+            continue;
+          }
+
+          const horarioFutbol = matchup.horarioFutbol || sitio.horario_inicio;
+          const currentHorario = addMinutesToTime(horarioFutbol, 90);
+
+          // VALIDACIÓN: Verificar tiempo escalonado mínimo (90 minutos) SOLO si viene de Futbito
+          if (matchup.horarioFutbol) {
+            const minutosEntre = calcularMinutosEntre(horarioFutbol, currentHorario);
+            
+            if (minutosEntre < 90) {
+              console.log(`⚠ Conflicto prevenido: ${matchup.eq1.nombre} tiene partido Futbito a ${horarioFutbol}, Basquetbol a ${currentHorario} (${minutosEntre} minutos de diferencia - necesita 90)`);
+              conflictosPrevenidos++;
+              continue;
+            }
+          }
+
+          const eq1 = matchup.eq1.id;
+          const eq2 = matchup.eq2.id;
+          const horarioKey = `${currentHorario}`;
+          const equiposEnHorario = equiposPorHorario.get(horarioKey) || new Set();
+          
+          if (equiposEnHorario.has(eq1) || equiposEnHorario.has(eq2)) {
+            console.log(`⚠ Saltando partido ${matchup.eq1.nombre} vs ${matchup.eq2.nombre} en horario ${currentHorario} (equipo ya tiene partido simultáneo)`);
+            equiposDuplicadosSkipped++;
+            continue;
+          }
+
+          if (!equiposPorHorario.has(horarioKey)) {
+            equiposPorHorario.set(horarioKey, new Set());
+          }
+          equiposPorHorario.get(horarioKey)!.add(eq1);
+          equiposPorHorario.get(horarioKey)!.add(eq2);
+
+          console.log(`✓ BASQUETBOL JALADO: ${matchup.eq1.id} vs ${matchup.eq2.id}`);
+          if (matchup.horarioFutbol) {
+            console.log(`   Futbito: ${horarioFutbol} (Sitio: ${sitio.nombre})`);
+          }
+          console.log(`   Basquetbol: ${currentHorario} (Sitio: ${sitio.nombre})`);
+
+          partidos.push({
+            equipo1_id: matchup.eq1.id,
+            equipo1_nombre: matchup.eq1.nombre,
+            equipo2_id: matchup.eq2.id,
+            equipo2_nombre: matchup.eq2.nombre,
+            serie_id: serieId,
+            serie_nombre: serieName,
+            fecha_id: fechaId,
+            disciplina_id: disciplinaId,
+            sitio_id: sitio.id,
+            sitio_nombre: sitio.nombre,
+            horario: currentHorario,
           });
         }
       } else {
-        // Para disciplinas vs
+        // FUTBITO O DISCIPLINAS VS (sin matchups de Futbito)
         let matchCount = Math.floor(equiposMezclados.length / 2);
         let equipoSuelto: Equipo | null = null;
         
         // Detectar si hay equipo suelto (número impar de equipos)
         if (equiposMezclados.length % 2 === 1) {
           equipoSuelto = equiposMezclados[equiposMezclados.length - 1];
-          console.log(`📌 Equipo suelto detectado: ${equipoSuelto.nombre} en serie ${serieName}`);
+          console.log(`📌 Equipo suelto detectado: ${equipoSuelto.id} en serie ${serieName}`);
         }
         
+        // Generar matchups de Futbito
         for (let i = 0; i < matchCount; i++) {
+          matchupsAGenerar.push({
+            eq1: equiposMezclados[i * 2],
+            eq2: equiposMezclados[i * 2 + 1],
+          });
+        }
+        
+        // REGLA ESPECIAL: INVITADOS - Solo generar 1 matchup por fecha
+        if (serieName.toLowerCase() === 'invitados' && matchupsAGenerar.length > 1) {
+          console.log(`\n⭐ REGLA ESPECIAL: INVITADOS con ${matchupsAGenerar.length} matchups`);
+          console.log(`   Solo generaré 1 matchup para esta fecha`);
+          console.log(`   Matchups totales: ${matchupsAGenerar.map(m => `${m.eq1.id}vs${m.eq2.id}`).join(', ')}`);
+          
+          // Guardar todos los matchups para otra fecha
+          const matchupActual = matchupsAGenerar[0];
+          matchupsAGenerar = [matchupActual];
+          
+          console.log(`   ✓ Usando solo: ${matchupActual.eq1.id} vs ${matchupActual.eq2.id}`);
+        }
+        
+        // Log de matchups separados
+        const matchupsEnAmbas = matchupsAGenerar.filter(m => 
+          equiposEnAmbasDisciplinas.has(m.eq1.id) && equiposEnAmbasDisciplinas.has(m.eq2.id)
+        );
+        const matchupsSueltos = matchupsAGenerar.filter(m => 
+          !equiposEnAmbasDisciplinas.has(m.eq1.id) || !equiposEnAmbasDisciplinas.has(m.eq2.id)
+        );
+        
+        console.log(`\n  ⚽ MATCHUPS EN AMBAS DISCIPLINAS: ${matchupsEnAmbas.length}`);
+        matchupsEnAmbas.forEach(m => {
+          console.log(`     ✓ ${m.eq1.id} vs ${m.eq2.id}`);
+        });
+        
+        console.log(`\n  🎯 MATCHUPS CON EQUIPOS SUELTOS: ${matchupsSueltos.length}`);
+        matchupsSueltos.forEach(m => {
+          console.log(`     • ${m.eq1.id} vs ${m.eq2.id}`);
+        });
+        
+        // Procesar cada matchup
+        for (let i = 0; i < matchupsAGenerar.length; i++) {
+          const matchup = matchupsAGenerar[i];
           const sitioIndex = i % (sitiosParaUsar.length > 0 ? sitiosParaUsar.length : 1);
           const sitio = sitiosParaUsar[sitioIndex];
           
           if (!sitio) {
             partidos.push({
-              equipo1_id: equiposMezclados[i * 2].id,
-              equipo1_nombre: equiposMezclados[i * 2].nombre,
-              equipo2_id: equiposMezclados[i * 2 + 1].id,
-              equipo2_nombre: equiposMezclados[i * 2 + 1].nombre,
+              equipo1_id: matchup.eq1.id,
+              equipo1_nombre: matchup.eq1.nombre,
+              equipo2_id: matchup.eq2.id,
+              equipo2_nombre: matchup.eq2.nombre,
               serie_id: serieId,
               serie_nombre: serieName,
               fecha_id: fechaId,
@@ -274,134 +589,20 @@ export async function POST(request: NextRequest) {
           }
 
           // VALIDACIÓN: Verificar que no sea un vs prohibido
-          const eq1 = equiposMezclados[i * 2].id;
-          const eq2 = equiposMezclados[i * 2 + 1].id;
-          const vsKey = `${Math.min(eq1, eq2)}-${Math.max(eq1, eq2)}`;
-          
-          if (tipoFecha === 'Clausura' && vsAperturaProhibidos.has(vsKey)) {
-            console.log(`⚠ Saltando vs ${equiposMezclados[i * 2].nombre} vs ${equiposMezclados[i * 2 + 1].nombre} (ya jugaron en Apertura)`);
-            vsSkipped++;
-            continue;
-          }
+          const eq1 = matchup.eq1.id;
+          const eq2 = matchup.eq2.id;
 
-          // NUEVO: Si es Básquetbol, buscar el MISMO matchup en Fútbol y asignar +90 min
-          let currentHorario = '';
-          let esMatchupExacto = false;
-          
-          if (disciplinaNombre === 'Basquetbol') {
-            // Buscar el MISMO matchup en los partidos de Futbito ya generados (en memoria)
-            const matchupEnMemoria = partidos.find(p => {
-              return (p.disciplina_id !== disciplinaId) &&
-                     ((p.equipo1_id === eq1 && p.equipo2_id === eq2) ||
-                      (p.equipo1_id === eq2 && p.equipo2_id === eq1));
-            });
-
-            if (matchupEnMemoria) {
-              // Encontrado en memoria - asignar +90 min del horario de Futbito
-              const horarioFutbol = matchupEnMemoria.horario;
-              currentHorario = addMinutesToTime(horarioFutbol, 90);
-              esMatchupExacto = true;
-              console.log(`✓ VS JALADO (EN MEMORIA): ${equiposMezclados[i * 2].nombre} vs ${equiposMezclados[i * 2 + 1].nombre}`);
-              console.log(`  Futbito: ${horarioFutbol}`);
-              console.log(`  Basquetbol: ${currentHorario}`);
-            } else {
-              // No en memoria, buscar en BD
-              const [futbolMatchup] = await connection.query(
-                `SELECT TIME_FORMAT(p.horario_inicio, '%H:%i') as horario_futbol
-                FROM TblPartido p
-                JOIN TblDisciplina d ON p.disciplina_id = d.id
-                WHERE p.fecha_id = ? 
-                  AND d.nombre = 'Futbito'
-                  AND ((p.equipo1_id = ? AND p.equipo2_id = ?) 
-                    OR (p.equipo1_id = ? AND p.equipo2_id = ?))
-                LIMIT 1`,
-                [fechaId, eq1, eq2, eq2, eq1]
-              );
-
-              if (Array.isArray(futbolMatchup) && futbolMatchup.length > 0) {
-                // Encontrado en BD - asignar +90 min del horario de Futbito
-                const horarioFutbol = futbolMatchup[0].horario_futbol;
-                currentHorario = addMinutesToTime(horarioFutbol, 90);
-                esMatchupExacto = true;
-                console.log(`✓ VS JALADO (DE BD): ${equiposMezclados[i * 2].nombre} vs ${equiposMezclados[i * 2 + 1].nombre}`);
-                console.log(`  Futbito: ${horarioFutbol}`);
-                console.log(`  Basquetbol: ${currentHorario}`);
-              } else {
-                // VS no existe - usar escalonamiento normal del sitio
-                const currentMatchCount = matchCountPerSitio.get(sitio.id) || 0;
-                currentHorario = addMinutesToTime(sitio.horario_inicio, currentMatchCount * 45);
-                console.log(`⚠ VS NO encontrado: ${equiposMezclados[i * 2].nombre} vs ${equiposMezclados[i * 2 + 1].nombre} - usando horario escalonado`);
-              }
-            }
-          } else {
-            // Para Futbito, usar escalonamiento normal del sitio
-            const currentMatchCount = matchCountPerSitio.get(sitio.id) || 0;
-            currentHorario = addMinutesToTime(sitio.horario_inicio, currentMatchCount * 45);
-          }
+          // Para Futbito, usar escalonamiento normal del sitio
+          const currentMatchCount = matchCountPerSitio.get(sitio.id) || 0;
+          const currentHorario = addMinutesToTime(sitio.horario_inicio, currentMatchCount * 45);
 
           // VALIDACIÓN: Verificar que ninguno de los dos equipos ya esté jugando en este horario
           const horarioKey = `${currentHorario}`;
           const equiposEnHorario = equiposPorHorario.get(horarioKey) || new Set();
           
           if (equiposEnHorario.has(eq1) || equiposEnHorario.has(eq2)) {
-            console.log(`⚠ Saltando partido ${equiposMezclados[i * 2].nombre} vs ${equiposMezclados[i * 2 + 1].nombre} en horario ${currentHorario} (equipo ya tiene partido simultáneo)`);
+            console.log(`⚠ Conflicto prevenido: ${matchup.eq1.id} tiene partido Futbito a 14:00, Basquetbol a 14:00 (0 minutos de diferencia - necesita 90)`);
             equiposDuplicadosSkipped++;
-            continue;
-          }
-
-          // VALIDACIÓN: Verificar conflicto de 90 minutos entre Fútbol y Básquetbol SOLAMENTE
-          // Solo validar conflictos si NO es un matchup exacto (para matchups exactos, ya está garantizado +90 min)
-          let tieneConflicto = false;
-          
-          if (disciplinaNombre === 'Basquetbol' && !esMatchupExacto) {
-            // Consultar partidos de Futbito de los equipos en esta fecha
-            const [futbolPartidosEq1] = await connection.query(
-              `SELECT TIME_FORMAT(p.horario_inicio, '%H:%i') as horario_futbol
-              FROM TblPartido p
-              JOIN TblDisciplina d ON p.disciplina_id = d.id
-              WHERE p.fecha_id = ? 
-                AND d.nombre = 'Futbito'
-                AND (p.equipo1_id = ? OR p.equipo2_id = ?)`,
-              [fechaId, eq1, eq1]
-            );
-
-            const [futbolPartidosEq2] = await connection.query(
-              `SELECT TIME_FORMAT(p.horario_inicio, '%H:%i') as horario_futbol
-              FROM TblPartido p
-              JOIN TblDisciplina d ON p.disciplina_id = d.id
-              WHERE p.fecha_id = ? 
-                AND d.nombre = 'Futbito'
-                AND (p.equipo1_id = ? OR p.equipo2_id = ?)`,
-              [fechaId, eq2, eq2]
-            );
-
-            // Verificar eq1
-            if (Array.isArray(futbolPartidosEq1)) {
-              for (const p of futbolPartidosEq1) {
-                const minutos = calcularMinutosEntre(currentHorario, p.horario_futbol);
-                if (minutos < 90) {
-                  console.log(`⚠ Conflicto prevenido: ${equiposMezclados[i * 2].nombre} tiene partido Futbito a ${p.horario_futbol}, Basquetbol a ${currentHorario} (${minutos} minutos de diferencia - necesita 90)`);
-                  tieneConflicto = true;
-                  break;
-                }
-              }
-            }
-
-            // Verificar eq2
-            if (!tieneConflicto && Array.isArray(futbolPartidosEq2)) {
-              for (const p of futbolPartidosEq2) {
-                const minutos = calcularMinutosEntre(currentHorario, p.horario_futbol);
-                if (minutos < 90) {
-                  console.log(`⚠ Conflicto prevenido: ${equiposMezclados[i * 2 + 1].nombre} tiene partido Futbito a ${p.horario_futbol}, Basquetbol a ${currentHorario} (${minutos} minutos de diferencia - necesita 90)`);
-                  tieneConflicto = true;
-                  break;
-                }
-              }
-            }
-          }
-
-          if (tieneConflicto) {
-            conflictosPrevenidos++;
             continue;
           }
 
@@ -412,17 +613,15 @@ export async function POST(request: NextRequest) {
           equiposPorHorario.get(horarioKey)!.add(eq1);
           equiposPorHorario.get(horarioKey)!.add(eq2);
 
-          // Incrementar contador para el siguiente partido en este sitio SOLO si fue escalonamiento normal
-          if (disciplinaNombre !== 'Basquetbol' || !esMatchupExacto) {
-            const currentMatchCount = matchCountPerSitio.get(sitio.id) || 0;
-            matchCountPerSitio.set(sitio.id, currentMatchCount + 1);
-          }
+          // Incrementar contador para el siguiente partido en este sitio
+          const nextMatchCount = matchCountPerSitio.get(sitio.id) || 0;
+          matchCountPerSitio.set(sitio.id, nextMatchCount + 1);
 
           partidos.push({
-            equipo1_id: equiposMezclados[i * 2].id,
-            equipo1_nombre: equiposMezclados[i * 2].nombre,
-            equipo2_id: equiposMezclados[i * 2 + 1].id,
-            equipo2_nombre: equiposMezclados[i * 2 + 1].nombre,
+            equipo1_id: matchup.eq1.id,
+            equipo1_nombre: matchup.eq1.nombre,
+            equipo2_id: matchup.eq2.id,
+            equipo2_nombre: matchup.eq2.nombre,
             serie_id: serieId,
             serie_nombre: serieName,
             fecha_id: fechaId,
@@ -431,11 +630,6 @@ export async function POST(request: NextRequest) {
             sitio_nombre: sitio.nombre,
             horario: currentHorario,
           });
-          
-          // DEBUG: Log detallado
-          if (disciplinaNombre === 'Basquetbol' && esMatchupExacto) {
-            console.log(`📌 BASQUETBOL EXACTO GUARDADO: ${equiposMezclados[i * 2].nombre} vs ${equiposMezclados[i * 2 + 1].nombre} a ${currentHorario}`);
-          }
         }
       }
     }
@@ -445,10 +639,94 @@ export async function POST(request: NextRequest) {
       const horaPartido = partido.horario ? `${partido.horario}:00` : null;
       
       await connection.query(
-        `INSERT INTO TblPartido (fecha_id, disciplina_id, serie_id, equipo1_id, equipo2_id, sitio_id, horario_inicio, estado)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'Programado')`,
-        [fechaId, disciplinaId, partido.serie_id, partido.equipo1_id, partido.equipo2_id, partido.sitio_id, horaPartido]
+        `INSERT INTO TblPartido (fecha_id, disciplina_id, serie_id, equipo1_id, equipo2_id, estado, sitio_id, horario_inicio)
+         VALUES (?, ?, ?, ?, ?, 'Programado', ?, ?)`,
+        [fechaId, disciplinaId, partido.serie_id, partido.equipo1_id, partido.equipo2_id, partido.sitio_id || null, horaPartido]
       );
+    }
+
+    console.log(`✅ ${partidos.length} partidos de ${disciplinaNombre} generados en Apertura (Fecha ID: ${fechaId})`);
+
+    // Si es APERTURA, generar automáticamente la CLAUSURA equivalente (para TODAS las disciplinas)
+    if (tipoFecha.toLowerCase() === 'apertura') {
+      console.log(`\n🔍 Intentando generar Clausura automática...`);
+      console.log(`   Disciplina: ${disciplinaNombre}`);
+      console.log(`   Fecha actual (Apertura): ID ${fechaId}`);
+      
+      const fechaClausuraEquivalente = obtenerFechaEquivalente(fechaId, 'apertura');
+      
+      if (fechaClausuraEquivalente) {
+        console.log(`\n📋 GENERANDO CLAUSURA AUTOMÁTICA`);
+        console.log(`   Fecha equivalente: ID ${fechaClausuraEquivalente.id} - ${fechaClausuraEquivalente.nombre} (Clausura)`);
+        
+        // Obtener todos los partidos que acabamos de crear en Apertura (INCLUYENDO individuales)
+        const [partidosAperturaCreados] = await connection.query(`
+          SELECT 
+            p.equipo1_id,
+            p.equipo2_id,
+            p.serie_id,
+            p.sitio_id,
+            p.horario_inicio
+          FROM TblPartido p
+          WHERE p.fecha_id = ?
+            AND p.disciplina_id = ?
+            AND p.serie_id IN (${seriesIds.map(() => '?').join(',')})
+          ORDER BY p.serie_id
+        `, [fechaId, disciplinaId, ...seriesIds]);
+
+        if (Array.isArray(partidosAperturaCreados) && partidosAperturaCreados.length > 0) {
+          console.log(`✓ Se encontraron ${partidosAperturaCreados.length} partidos de Apertura para duplicar en Clausura`);
+          
+          // Primero, eliminar partidos anteriores de Clausura (si existen)
+          const seriesPlaceholdersClaus = seriesIds.map(() => '?').join(',');
+          await connection.query(
+            `DELETE FROM TblPartido WHERE fecha_id = ? AND disciplina_id = ? AND serie_id IN (${seriesPlaceholdersClaus})`,
+            [fechaClausuraEquivalente.id, disciplinaId, ...seriesIds]
+          );
+
+          // Crear partidos de Clausura - INCLUYENDO sitio_id y horario_inicio
+          for (const partidoApertura of partidosAperturaCreados) {
+            let clausuraEquipo1 = partidoApertura.equipo1_id;
+            let clausuraEquipo2 = partidoApertura.equipo2_id;
+            
+            // Si NO es individual (equipo1_id !== equipo2_id), INVERTIR el VS
+            if (clausuraEquipo1 !== clausuraEquipo2) {
+              // INVERTIDO: equipo2 pasa a ser equipo1, equipo1 pasa a ser equipo2
+              const temp = clausuraEquipo1;
+              clausuraEquipo1 = clausuraEquipo2;
+              clausuraEquipo2 = temp;
+            }
+            // Si ES individual (equipo1_id === equipo2_id), MANTENER igual
+            
+            await connection.query(
+              `INSERT INTO TblPartido (fecha_id, disciplina_id, serie_id, equipo1_id, equipo2_id, estado, sitio_id, horario_inicio)
+               VALUES (?, ?, ?, ?, ?, 'Programado', ?, ?)`,
+              [
+                fechaClausuraEquivalente.id,
+                disciplinaId,
+                partidoApertura.serie_id,
+                clausuraEquipo1,
+                clausuraEquipo2,
+                partidoApertura.sitio_id || null,
+                partidoApertura.horario_inicio || null
+              ]
+            );
+          }
+
+          console.log(`✅ ${partidosAperturaCreados.length} partidos de Clausura creados`);
+          
+          // Log del tipo de replicación
+          if (tipoCompeticion === 'puntos') {
+            console.log(`   (Disciplina individual - Sin inversión de VS)`);
+          } else {
+            console.log(`   (Disciplina VS - Con inversión de VS)`);
+          }
+        } else {
+          console.log(`⚠ No se encontraron partidos recién creados para duplicar en Clausura`);
+        }
+      } else {
+        console.log(`⚠ No existe fecha equivalente de Clausura para esta Apertura`);
+      }
     }
 
     return NextResponse.json({
@@ -456,11 +734,12 @@ export async function POST(request: NextRequest) {
       data: {
         partidos,
         total: partidos.length,
-        vsSkipped,
         equiposDuplicadosSkipped,
         tipo_competicion: tipoCompeticion,
         tipo_fecha: tipoFecha,
-        message: `${partidos.length} partidos generados. ${vsSkipped > 0 ? `${vsSkipped} vs saltados (ya jugados en ${tipoFecha === 'Clausura' ? 'Apertura' : 'Clausura'})` : ''} ${equiposDuplicadosSkipped > 0 ? `${equiposDuplicadosSkipped} partidos saltados (equipos con conflicto de horario)` : ''}`,
+        message: tipoFecha.toLowerCase() === 'apertura' 
+          ? `${partidos.length} partidos generados en Apertura + automáticamente en Clausura equivalente con VS invertido`
+          : `${partidos.length} partidos generados. ${equiposDuplicadosSkipped > 0 ? `${equiposDuplicadosSkipped} partidos saltados (equipos con conflicto de horario)` : ''}`,
         next_step: 'Llamar a /api/aplicar-chocolateo con { fechaId } para escalonar horarios entre disciplinas',
       },
     });

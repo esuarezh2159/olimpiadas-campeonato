@@ -123,7 +123,11 @@ export async function GET(request: NextRequest) {
 
         for (const partido of equipoPartidos) {
           try {
-            if (equipo.tipo_competicion === 'puntos') {
+            // Disciplinas individuales por nombre
+            const disciplinasIndividuales = ['atletismo', 'billar', 'cubilete', 'inauguracion', 'natacion', 'tiro al sapo'];
+            const esIndividual = disciplinasIndividuales.includes(equipo.disciplina_nombre.toLowerCase());
+            
+            if (equipo.tipo_competicion === 'puntos' || esIndividual) {
               // Disciplinas individuales
               const puntosIndividuales = partido.puntos_individuales || 0;
               goles_favor += puntosIndividuales;

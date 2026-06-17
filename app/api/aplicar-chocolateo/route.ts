@@ -39,16 +39,18 @@ export async function POST(request: NextRequest) {
         p.equipo2_id,
         e1.nombre as eq1_nombre,
         e2.nombre as eq2_nombre,
-        TIME_FORMAT(p.horario_inicio, '%H:%i') as horario_actual,
-        p.sitio_id
+        COALESCE(TIME_FORMAT(p.horario_inicio, '%H:%i'), '14:00') as horario_actual
       FROM TblPartido p
       JOIN TblDisciplina d ON p.disciplina_id = d.id
       JOIN TblEquipo e1 ON p.equipo1_id = e1.id
       JOIN TblEquipo e2 ON p.equipo2_id = e2.id
       WHERE p.fecha_id = ? AND d.tipo_competicion = 'vs' AND p.equipo1_id != p.equipo2_id
-      ORDER BY p.disciplina_id, p.horario_inicio`,
+      ORDER BY p.disciplina_id, p.id`,
       [fechaId]
     );
+
+    console.log(`\n🔵 CHOCOLATEO INICIADO PARA FECHA ${fechaId}`);
+    console.log(`   Partidos VS encontrados: ${Array.isArray(partidosResult) ? partidosResult.length : 0}`);
 
     if (!Array.isArray(partidosResult) || partidosResult.length === 0) {
       return NextResponse.json({
@@ -68,6 +70,11 @@ export async function POST(request: NextRequest) {
       matchupsByKey.get(matchupKey)!.push(row);
     });
 
+    console.log(`   Matchups únicos encontrados: ${matchupsByKey.size}`);
+    for (const [key, partidos] of matchupsByKey.entries()) {
+      console.log(`     Matchup ${key}: ${partidos.length} disciplinas (${partidos.map(p => p.disciplina_nombre).join(', ')})`);
+    }
+
     // Para cada matchup que aparece en FÚTBOL Y BÁSQUETBOL
     let actualizacionesRealizadas = 0;
     const detallesActualizacion = [];
@@ -78,21 +85,26 @@ export async function POST(request: NextRequest) {
         // Verificar que sean Fútbol y Básquetbol
         const disciplinas = partidos.map(p => p.disciplina_nombre);
         const esFootballYBasket = 
-          (disciplinas.includes('Futbito') && disciplinas.includes('Basquetbol')) ||
-          (disciplinas.includes('Futbito') && disciplinas.includes('Basquetbol'));
+          (disciplinas.includes('Fulbito') && disciplinas.includes('Basquetbol'));
+        
+        console.log(`   Procesando matchup ${matchupKey}: disciplinas=${JSON.stringify(disciplinas)}, esFootballYBasket=${esFootballYBasket}`);
         
         if (esFootballYBasket) {
           // Ordenar: primero Fútbol, luego Básquetbol (así Fútbol es la referencia)
           partidos.sort((a, b) => {
-            const orderMap: { [key: string]: number } = { 'Futbito': 0, 'Basquetbol': 1 };
+            const orderMap: { [key: string]: number } = { 'Fulbito': 0, 'Basquetbol': 1 };
             return (orderMap[a.disciplina_nombre] || 99) - (orderMap[b.disciplina_nombre] || 99);
           });
 
           const futbol = partidos[0]; // Referencia (Fútbol)
           const basquet = partidos[1]; // A escalonar (Básquetbol)
 
-          // Escalonar 90 minutos respecto al Fútbol
-          const nuevoHorario = addMinutesToTime(futbol.horario_actual, 90);
+          console.log(`     Futbito(${futbol.horario_actual}) vs Basquetbol(${basquet.horario_actual})`);
+
+          // Escalonar 45 minutos respecto al Fútbol (chocolateo)
+          const nuevoHorario = addMinutesToTime(futbol.horario_actual, 45);
+
+          console.log(`     Nuevo horario Basquetbol: ${nuevoHorario}`);
 
           detallesActualizacion.push({
             matchup: matchupKey,
@@ -100,18 +112,23 @@ export async function POST(request: NextRequest) {
             futbol_horario: futbol.horario_actual,
             basquet_horario_anterior: basquet.horario_actual,
             basquet_horario_nuevo: nuevoHorario,
-            razon: `Mismo matchup en ambas disciplinas: Basquetbol escalonado 90 min después de Fútbol`,
+            razon: `Mismo matchup en ambas disciplinas: Basquetbol escalonado 45 min después de Fútbol (chocolateo)`,
           });
 
-          // Actualizar Básquetbol en BD
-          await connection.query(
-            `UPDATE TblPartido SET horario_inicio = ? WHERE id = ?`,
-            [`${nuevoHorario}:00`, basquet.id]
-          );
+          // Actualizar Básquetbol en BD SOLO si es diferente
+          if (basquet.horario_actual !== nuevoHorario) {
+            console.log(`       ACTUALIZANDO: ${nuevoHorario}:00 para partido ${basquet.id}`);
+            await connection.query(
+              `UPDATE TblPartido SET horario_inicio = ? WHERE id = ?`,
+              [`${nuevoHorario}:00`, basquet.id]
+            );
 
-          console.log(`✓ Chocolateo: ${futbol.eq1_nombre} vs ${futbol.eq2_nombre} | Futbito(${futbol.horario_actual}) → Basquetbol(${nuevoHorario})`);
+            console.log(`✓ Chocolateo: ${futbol.eq1_nombre} vs ${futbol.eq2_nombre} | Futbito(${futbol.horario_actual}) → Basquetbol(${nuevoHorario})`);
 
-          actualizacionesRealizadas++;
+            actualizacionesRealizadas++;
+          } else {
+            console.log(`ℹ Chocolate sin cambio: ${futbol.eq1_nombre} vs ${futbol.eq2_nombre} ya estaba a los 45 min`);
+          }
         }
       }
     }

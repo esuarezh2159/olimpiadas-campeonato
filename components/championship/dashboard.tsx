@@ -11,12 +11,13 @@ import { PartidosSection } from './sections/partidos-section';
 import { PosicionesSection } from './sections/posiciones-section';
 import { EstadiosSection } from './sections/estadios-section';
 import { EliminatoriasSectionComponent } from './sections/eliminatorias-section';
+import { UsuariosSection } from './sections/usuarios-section';
 import { CalendarModal } from './modals/calendar-modal';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import ExcelJS from 'exceljs';
 
-type Section = 'dashboard' | 'disciplinas' | 'series' | 'equipos' | 'fechas' | 'partidos' | 'posiciones' | 'estadios' | 'eliminatorias';
+type Section = 'dashboard' | 'disciplinas' | 'series' | 'equipos' | 'fechas' | 'partidos' | 'posiciones' | 'estadios' | 'eliminatorias' | 'usuarios';
 
 interface PartidoDB {
   id: number;
@@ -425,6 +426,8 @@ function DashboardContent() {
         return <EstadiosSection />;
       case 'eliminatorias':
         return <EliminatoriasSectionComponent />;
+      case 'usuarios':
+        return <UsuariosSection />;
       default:
         return null;
     }

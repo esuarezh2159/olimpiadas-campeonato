@@ -38,7 +38,7 @@ export function LoginForm() {
 
       // Guardar token y datos del usuario en localStorage
       localStorage.setItem('token', data.token);
-      localStorage.setItem('user', JSON.stringify(data.user));
+      localStorage.setItem('userData', JSON.stringify(data.user));
 
       // Guardar token en cookies para el middleware
       document.cookie = `token=${data.token}; path=/; max-age=86400`;

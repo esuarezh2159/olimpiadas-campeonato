@@ -114,9 +114,9 @@ export async function POST(request: NextRequest) {
       const eq2 = equiposSueltos[i * 2 + 1];
 
       await connection.query(
-        `INSERT INTO TblPartido (fecha_id, disciplina_id, serie_id, equipo1_id, equipo2_id, sitio_id, horario_inicio, estado)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'Programado')`,
-        [fechaId, disciplinaId, serieId, eq1.id, eq2.id, sitioId, `${nuevoHorario}:00`]
+        `INSERT INTO TblPartido (fecha_id, disciplina_id, serie_id, equipo1_id, equipo2_id, estado)
+         VALUES (?, ?, ?, ?, ?, 'Programado')`,
+        [fechaId, disciplinaId, serieId, eq1.id, eq2.id]
       );
 
       partidosGenerados++;

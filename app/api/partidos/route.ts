@@ -34,11 +34,10 @@ export async function GET(request: NextRequest) {
         e2.nombre as equipo2_nombre,
         p.goles_equipo1,
         p.goles_equipo2,
-        0 as puntos_individuales,
+        COALESCE(p.puntos_individuales, 0) as puntos_individuales,
         p.estado,
-        p.sitio_id,
-        COALESCE(sit.nombre, 'Sin asignar') as sitio_nombre,
-        TIME_FORMAT(p.horario_inicio, '%H:%i') as horario_inicio,
+        COALESCE(st.nombre, 'Sin asignar') as sitio_nombre,
+        COALESCE(p.horario_inicio, '14:00:00') as horario_inicio,
         d.tipo_competicion,
         p.fecha_creacion
       FROM TblPartido p
@@ -47,7 +46,7 @@ export async function GET(request: NextRequest) {
       JOIN TblSeries s ON p.serie_id = s.id
       JOIN TblEquipo e1 ON p.equipo1_id = e1.id
       LEFT JOIN TblEquipo e2 ON p.equipo2_id = e2.id
-      LEFT JOIN TblSitio sit ON p.sitio_id = sit.id
+      LEFT JOIN TblSitio st ON p.sitio_id = st.id
     `;
 
     const params: any[] = [];
@@ -92,15 +91,21 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// PUT - Actualizar resultado de un partido
+// PUT - Actualizar resultado, equipos u otros datos de un partido
 export async function PUT(request: NextRequest) {
   let connection;
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
-    const { goles_equipo1, goles_equipo2, puntos_individuales, estado } = await request.json();
+    const body = await request.json();
+    const { goles_equipo1, goles_equipo2, puntos_individuales, estado, equipo1_id, equipo2_id, horario_inicio } = body;
+
+    console.log('🔵 PUT /api/partidos - Actualizando partido');
+    console.log('  ID:', id);
+    console.log('  Body recibido:', body);
 
     if (!id) {
+      console.log('❌ No hay ID');
       return NextResponse.json(
         { error: 'ID del partido es requerido' },
         { status: 400 }
@@ -109,28 +114,64 @@ export async function PUT(request: NextRequest) {
 
     connection = await mysql.createConnection(dbConfig);
 
-    const updateQuery = `
-      UPDATE TblPartido 
-      SET goles_equipo1 = ?, goles_equipo2 = ?, puntos_individuales = ?, estado = ?
-      WHERE id = ?
-    `;
+    // Construir dinámicamente la query UPDATE según qué campos se envíen
+    const updateFields: string[] = [];
+    const values: any[] = [];
 
-    const result = await connection.query(updateQuery, [
-      goles_equipo1 || 0,
-      goles_equipo2 || 0,
-      puntos_individuales || null,
-      estado || 'Programado',
-      id,
-    ]);
+    if (goles_equipo1 !== undefined) {
+      updateFields.push('goles_equipo1 = ?');
+      values.push(goles_equipo1);
+    }
+    if (goles_equipo2 !== undefined) {
+      updateFields.push('goles_equipo2 = ?');
+      values.push(goles_equipo2);
+    }
+    if (puntos_individuales !== undefined) {
+      updateFields.push('puntos_individuales = ?');
+      values.push(puntos_individuales);
+    }
+    if (estado !== undefined) {
+      updateFields.push('estado = ?');
+      values.push(estado);
+    }
+    if (equipo1_id !== undefined) {
+      updateFields.push('equipo1_id = ?');
+      values.push(equipo1_id);
+    }
+    if (equipo2_id !== undefined) {
+      updateFields.push('equipo2_id = ?');
+      values.push(equipo2_id);
+    }
+    if (horario_inicio !== undefined) {
+      updateFields.push('horario_inicio = ?');
+      values.push(horario_inicio);
+    }
+
+    if (updateFields.length === 0) {
+      return NextResponse.json(
+        { error: 'No hay campos para actualizar' },
+        { status: 400 }
+      );
+    }
+
+    values.push(id);
+
+    const updateQuery = `UPDATE TblPartido SET ${updateFields.join(', ')} WHERE id = ?`;
+
+    console.log('  Valores a actualizar:', values);
+
+    await connection.query(updateQuery, values);
+
+    console.log('✅ Partido actualizado correctamente');
 
     return NextResponse.json({
       success: true,
       message: 'Partido actualizado correctamente',
     });
   } catch (error) {
-    console.error('Error actualizando partido:', error);
+    console.error('❌ Error actualizando partido:', error);
     return NextResponse.json(
-      { error: 'Error al actualizar partido' },
+      { error: 'Error al actualizar partido', details: error instanceof Error ? error.message : 'Error desconocido' },
       { status: 500 }
     );
   } finally {

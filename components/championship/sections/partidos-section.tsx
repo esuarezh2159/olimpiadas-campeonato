@@ -6,6 +6,7 @@ import { PartidoForm } from '../forms/partido-form';
 import { PartidoList } from '../lists/partido-list';
 import { ResultadoModal } from '../modals/resultado-modal';
 import { CambiarHorarioModal } from '../modals/cambiar-horario-modal';
+import { EditPartidoModal } from '../modals/edit-partido-modal';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 
@@ -14,6 +15,7 @@ interface Fecha {
   nombre: string;
   fecha: string;
   activa: boolean;
+  tipo?: string;
 }
 
 interface PartidoDB {
@@ -52,7 +54,8 @@ export function PartidosSection() {
 
   // Estado para generar partidos
   const [showChocolateModal, setShowChocolateModal] = useState(false);
-  const [fechasReales, setFechasReales] = useState<Fecha[]>([]);
+  const [fechasReales, setFechasReales] = useState<Fecha[]>([]); // TODAS las fechas (para tabla)
+  const [fechasApertura, setFechasApertura] = useState<Fecha[]>([]); // Solo Apertura (para modal)
   const [selectedFechaId, setSelectedFechaId] = useState<string>('');
   const [selectedDisciplinaIds, setSelectedDisciplinaIds] = useState<Set<number>>(new Set());
   const [selectedSitioId, setSelectedSitioId] = useState<string>('');
@@ -80,12 +83,19 @@ export function PartidosSection() {
   const [resultadoLocal, setResultadoLocal] = useState<number>(0);
   const [resultadoVisitante, setResultadoVisitante] = useState<number>(0);
   const [resultadoEstado, setResultadoEstado] = useState<string>('Programado');
+  const [subDisciplinas, setSubDisciplinas] = useState<any[]>([]);
+  const [puntosSubDisciplinas, setPuntosSubDisciplinas] = useState<Map<number, number>>(new Map());
 
   // Estado para cambiar horario
   const [showCambiarHorarioModal, setShowCambiarHorarioModal] = useState(false);
   const [partidoParaCambiarHorario, setPartidoParaCambiarHorario] = useState<PartidoDB | null>(null);
   const [cambiandoHorario, setCambiandoHorario] = useState(false);
   const [horariosDisponibles, setHorariosDisponibles] = useState<string[]>([]);
+
+  // Estado para editar equipos
+  const [showEditPartidoModal, setShowEditPartidoModal] = useState(false);
+  const [partidoParaEditar, setPartidoParaEditar] = useState<PartidoDB | null>(null);
+  const [equiposPorDisciplina, setEquiposPorDisciplina] = useState<Map<number, any[]>>(new Map());
 
   // Cargar fechas reales de la API
   useEffect(() => {
@@ -95,7 +105,14 @@ export function PartidosSection() {
         const response = await fetch('/api/fechas');
         const data = await response.json();
         if (data.success) {
+          // Guardar TODAS las fechas (para tabla de partidos)
           setFechasReales(data.data || []);
+          
+          // Filtrar solo las fechas de APERTURA (1-5) para el modal de generación
+          const soloApertura = (data.data || []).filter((fecha: Fecha) => 
+            fecha.tipo?.toLowerCase() === 'apertura'
+          );
+          setFechasApertura(soloApertura);
         }
       } catch (error) {
         console.error('Error cargando fechas:', error);
@@ -283,23 +300,74 @@ export function PartidosSection() {
     }
   };
 
-  const handleEditResultado = (partido: PartidoDB) => {
+  const handleEditResultado = async (partido: PartidoDB) => {
     setEditingPartido(partido);
+    setPuntosSubDisciplinas(new Map());
+    
+    // Inicializar los valores con los datos actuales del partido
+    setResultadoLocal(partido.goles_equipo1 || 0);
+    setResultadoVisitante(partido.goles_equipo2 || 0);
+    setResultadoEstado(partido.estado || 'Programado');
+    
+    // Cargar sub-disciplinas si existen
+    try {
+      const response = await fetch(`/api/subdisciplinas?disciplinaId=${partido.disciplina_id}`);
+      const data = await response.json();
+      if (data.success && data.data && data.data.length > 0) {
+        setSubDisciplinas(data.data);
+      } else {
+        setSubDisciplinas([]);
+      }
+    } catch (error) {
+      console.error('Error cargando sub-disciplinas:', error);
+      setSubDisciplinas([]);
+    }
+    
     setShowResultadoModal(true);
   };
 
   const handleSaveResultado = async () => {
-    if (!editingPartido) return;
+    console.log('🔵 handleSaveResultado iniciado');
+    if (!editingPartido) {
+      console.log('❌ No hay partido editando');
+      return;
+    }
 
     try {
       const body: any = {
         estado: resultadoEstado,
       };
 
+      // Disciplinas individuales por nombre
+      const disciplinasIndividuales = ['atletismo', 'billar', 'cubilete', 'inauguracion', 'natacion', 'tiro al sapo'];
+      const esIndividual = disciplinasIndividuales.includes(editingPartido.disciplina_nombre.toLowerCase());
+
+      console.log('📝 Datos del partido:', {
+        id: editingPartido.id,
+        disciplina: editingPartido.disciplina_nombre,
+        esIndividual,
+        tipo_competicion: editingPartido.tipo_competicion,
+        resultadoLocal,
+        resultadoVisitante,
+      });
+
       // Diferente lógica según tipo de competencia
-      if (editingPartido.tipo_competicion === 'puntos') {
-        // Para disciplinas individuales: usar puntos_individuales
-        body.puntos_individuales = resultadoLocal;
+      if (editingPartido.tipo_competicion === 'puntos' || esIndividual) {
+        // Para disciplinas individuales
+        if (subDisciplinas.length > 0) {
+          // Si hay sub-disciplinas, sumar todos los puntos
+          let totalPuntos = 0;
+          puntosSubDisciplinas.forEach(puntos => {
+            totalPuntos += puntos;
+          });
+          body.puntos_individuales = totalPuntos;
+          console.log('📊 Disciplina individual con sub-disciplinas. Total puntos:', totalPuntos);
+          // TODO: En el futuro, guardar puntos por sub-disciplina en tabla separada
+        } else {
+          // Sin sub-disciplinas
+          body.puntos_individuales = resultadoLocal;
+          console.log('📊 Disciplina individual sin sub-disciplinas. Puntos:', resultadoLocal);
+        }
         body.goles_equipo1 = 0;
         body.goles_equipo2 = 0;
       } else {
@@ -307,7 +375,10 @@ export function PartidosSection() {
         body.goles_equipo1 = resultadoLocal;
         body.goles_equipo2 = resultadoVisitante;
         body.puntos_individuales = null;
+        console.log('⚽ Disciplina VS. Goles:', resultadoLocal, '-', resultadoVisitante);
       }
+
+      console.log('📤 Body enviado al API:', body);
 
       const response = await fetch(`/api/partidos?id=${editingPartido.id}`, {
         method: 'PUT',
@@ -315,7 +386,42 @@ export function PartidosSection() {
         body: JSON.stringify(body),
       });
 
+      console.log('📥 Response status:', response.status);
+      const responseData = await response.json();
+      console.log('📥 Response data:', responseData);
+      
       if (response.ok) {
+        console.log('✅ Respuesta OK. Actualizando UI...');
+        
+        // Si hay sub-disciplinas, guardarlas en la tabla TblPartidoSubDisciplina
+        if (subDisciplinas.length > 0 && puntosSubDisciplinas.size > 0) {
+          console.log('💾 Guardando puntos por sub-disciplina...');
+          const puntosPorSubDisc: { [key: number]: number } = {};
+          puntosSubDisciplinas.forEach((puntos, subDisciplinaId) => {
+            puntosPorSubDisc[subDisciplinaId] = puntos;
+          });
+
+          try {
+            const subDisciplinaResponse = await fetch('/api/partido-subdisciplina', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                partidoId: editingPartido.id,
+                puntosPorSubDisciplina: puntosPorSubDisc,
+              }),
+            });
+
+            const subDisciplinaData = await subDisciplinaResponse.json();
+            if (subDisciplinaResponse.ok) {
+              console.log('✅ Puntos por sub-disciplina guardados');
+            } else {
+              console.error('❌ Error guardando puntos por sub-disciplina:', subDisciplinaData);
+            }
+          } catch (subDisciplinaError) {
+            console.error('❌ Error guardando sub-disciplinas:', subDisciplinaError);
+          }
+        }
+        
         // Actualizar la tabla de partidos
         setPartidosDB(
           partidosDB.map(p =>
@@ -332,16 +438,23 @@ export function PartidosSection() {
         );
         
         // Disparar evento global para actualizar posiciones
+        console.log('🎉 Disparando evento resultadoGuardado');
         window.dispatchEvent(new Event('resultadoGuardado'));
         
+        console.log('🔒 Cerrando modal');
         setShowResultadoModal(false);
         setEditingPartido(null);
         setResultadoLocal(0);
         setResultadoVisitante(0);
         setResultadoEstado('Programado');
+        console.log('✅ Listo!');
+      } else {
+        console.error('❌ Respuesta no OK. Status:', response.status);
+        console.error('❌ Error data:', responseData);
+        alert(`❌ Error: ${responseData.error || 'Error desconocido'}`);
       }
     } catch (error) {
-      console.error('Error guardando resultado:', error);
+      console.error('❌ Error guardando resultado:', error);
     }
   };
 
@@ -399,6 +512,96 @@ export function PartidosSection() {
       alert('Error al cambiar el horario');
     } finally {
       setCambiandoHorario(false);
+    }
+  };
+
+  const handleEditarEquipos = async (partido: PartidoDB) => {
+    setPartidoParaEditar(partido);
+    
+    // Cargar equipos de la disciplina si no los tenemos cached
+    const cached = equiposPorDisciplina.get(partido.disciplina_id);
+    if (!cached) {
+      try {
+        const response = await fetch(`/api/equipos?disciplinaId=${partido.disciplina_id}`);
+        const data = await response.json();
+        
+        if (data.success && data.data) {
+          // Normalizar estructura: el API retorna equipo_id y equipo_nombre
+          // pero necesitamos id y nombre
+          const equiposUnicos = Array.from(
+            new Map(
+              data.data.map(ed => [
+                ed.equipo_id, 
+                { 
+                  id: ed.equipo_id, 
+                  nombre: ed.equipo_nombre 
+                }
+              ])
+            ).values()
+          );
+          
+          console.log('✅ Equipos normalizados:', equiposUnicos);
+          
+          const newMap = new Map(equiposPorDisciplina);
+          newMap.set(partido.disciplina_id, equiposUnicos);
+          setEquiposPorDisciplina(newMap);
+        }
+      } catch (error) {
+        console.error('Error cargando equipos:', error);
+      }
+    }
+    
+    setShowEditPartidoModal(true);
+  };
+
+  const handleGuardarEquipos = async (updatedPartido: any) => {
+    try {
+      const response = await fetch(`/api/partidos?id=${updatedPartido.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          equipo1_id: updatedPartido.equipo1_id,
+          equipo2_id: updatedPartido.equipo2_id,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        // Recargar partidos
+        const refreshResponse = await fetch('/api/partidos');
+        const refreshData = await refreshResponse.json();
+        if (refreshData.success) {
+          setPartidosDB(refreshData.data || []);
+        }
+        alert('Equipos actualizados correctamente');
+      } else {
+        throw new Error(data.error || 'Error al guardar');
+      }
+    } catch (error) {
+      console.error('Error guardando equipos:', error);
+      throw error;
+    }
+  };
+
+  const handleEliminarPartido = async (partidoId: number) => {
+    try {
+      const response = await fetch(`/api/partidos?id=${partidoId}`, {
+        method: 'DELETE',
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        // Eliminar de la tabla local
+        setPartidosDB(partidosDB.filter(p => p.id !== partidoId));
+        alert('Partido eliminado correctamente');
+      } else {
+        throw new Error(data.error || 'Error al eliminar');
+      }
+    } catch (error) {
+      console.error('Error eliminando partido:', error);
+      throw error;
     }
   };
 
@@ -476,7 +679,7 @@ export function PartidosSection() {
                   <option value="">
                     {fechasLoading ? 'Cargando fechas...' : '-- Selecciona una fecha --'}
                   </option>
-                  {fechasReales.map(fecha => (
+                  {fechasApertura.map(fecha => (
                     <option key={fecha.id} value={String(fecha.id)}>
                       {fecha.nombre} - {formatDate(fecha.fecha)}
                     </option>
@@ -714,22 +917,52 @@ export function PartidosSection() {
 
               {/* Equipos y Puntos/Goles */}
               <div className="space-y-4">
-                {editingPartido.tipo_competicion === 'puntos' ? (
+                {editingPartido.tipo_competicion === 'puntos' || 
+                 ['atletismo', 'billar', 'cubilete', 'inauguracion', 'natacion', 'tiro al sapo'].includes(
+                   editingPartido.disciplina_nombre.toLowerCase()
+                 ) ? (
                   // Competencia individual
-                  <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
-                    <p className="text-sm text-slate-600 mb-2">Competencia Individual</p>
-                    <p className="text-2xl font-bold text-slate-900">{editingPartido.equipo1_nombre}</p>
-                    <div className="mt-4 p-3 bg-white rounded border border-blue-200">
-                      <label className="block text-xs text-slate-600 mb-1">Puntos</label>
-                      <input
-                        type="number"
-                        min="0"
-                        value={resultadoLocal}
-                        onChange={(e) => setResultadoLocal(Math.max(0, parseInt(e.target.value) || 0))}
-                        className="w-full text-center text-3xl font-bold bg-white border-2 border-blue-300 rounded-lg px-2 py-2"
-                      />
+                  <>
+                    <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+                      <p className="text-sm text-slate-600 mb-2">Competencia Individual</p>
+                      <p className="text-2xl font-bold text-slate-900">{editingPartido.equipo1_nombre}</p>
                     </div>
-                  </div>
+
+                    {/* Sub-disciplinas si existen */}
+                    {subDisciplinas.length > 0 ? (
+                      <div className="space-y-3">
+                        <p className="text-sm font-semibold text-slate-700">Puntos por Sub-disciplina</p>
+                        {subDisciplinas.map((subDisc) => (
+                          <div key={subDisc.id} className="p-3 bg-white rounded border border-slate-200">
+                            <label className="block text-sm text-slate-600 mb-2">{subDisc.nombre}</label>
+                            <input
+                              type="number"
+                              min="0"
+                              value={puntosSubDisciplinas.get(subDisc.id) || 0}
+                              onChange={(e) => {
+                                const newMap = new Map(puntosSubDisciplinas);
+                                newMap.set(subDisc.id, Math.max(0, parseInt(e.target.value) || 0));
+                                setPuntosSubDisciplinas(newMap);
+                              }}
+                              className="w-full text-center text-2xl font-bold bg-white border-2 border-blue-300 rounded-lg px-2 py-2"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      // Sin sub-disciplinas
+                      <div className="p-3 bg-white rounded border border-blue-200">
+                        <label className="block text-xs text-slate-600 mb-1">Puntos</label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={resultadoLocal}
+                          onChange={(e) => setResultadoLocal(Math.max(0, parseInt(e.target.value) || 0))}
+                          className="w-full text-center text-3xl font-bold bg-white border-2 border-blue-300 rounded-lg px-2 py-2"
+                        />
+                      </div>
+                    )}
+                  </>
                 ) : (
                   // Competencia vs
                   <>
@@ -922,7 +1155,7 @@ export function PartidosSection() {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-slate-900">
-                        {partido.tipo_competicion === 'puntos' ? (
+                        {partido.equipo1_id === partido.equipo2_id ? (
                           <div className="font-medium text-center text-blue-600">
                             {partido.equipo1_nombre}
                             <div className="text-xs text-slate-600 mt-1">Individual</div>
@@ -943,7 +1176,7 @@ export function PartidosSection() {
                       </td>
                       <td className="px-4 py-3 text-center">
                         <span className="font-bold text-lg">
-                          {partido.tipo_competicion === 'puntos' 
+                          {partido.equipo1_id === partido.equipo2_id 
                             ? partido.puntos_individuales ?? 0
                             : `${partido.goles_equipo1} - ${partido.goles_equipo2}`
                           }
@@ -970,6 +1203,13 @@ export function PartidosSection() {
                           className="text-blue-600 hover:text-blue-800 font-medium text-sm"
                         >
                           Actualizar
+                        </button>
+                        <button
+                          onClick={() => handleEditarEquipos(partido)}
+                          className="text-purple-600 hover:text-purple-800 font-medium text-sm"
+                          title="Editar equipos o eliminar partido"
+                        >
+                          ✏️ Editar Equipos
                         </button>
                         <button
                           onClick={() => handleAbrirCambiarHorario(partido)}
@@ -1005,6 +1245,21 @@ export function PartidosSection() {
           }}
           horariosDisponibles={horariosDisponibles}
           loading={cambiandoHorario}
+        />
+      )}
+
+      {/* Modal para editar equipos o eliminar partido */}
+      {showEditPartidoModal && partidoParaEditar && (
+        <EditPartidoModal
+          isOpen={showEditPartidoModal}
+          onClose={() => {
+            setShowEditPartidoModal(false);
+            setPartidoParaEditar(null);
+          }}
+          partido={partidoParaEditar}
+          equipos={equiposPorDisciplina.get(partidoParaEditar.disciplina_id) || []}
+          onSave={handleGuardarEquipos}
+          onDelete={handleEliminarPartido}
         />
       )}
     </div>

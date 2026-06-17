@@ -25,11 +25,19 @@ interface Posicion {
   es_ganador: boolean;
 }
 
+interface SubDisciplina {
+  id: number;
+  nombre: string;
+  disciplina_id: number;
+}
+
 export function PosicionesSection() {
   const { disciplinas } = useChampionship();
   const [posiciones, setPosiciones] = useState<Posicion[]>([]);
   const [loading, setLoading] = useState(false);
   const [filterDisciplinaId, setFilterDisciplinaId] = useState<string>('todas');
+  const [subDisciplinasPorDisciplina, setSubDisciplinasPorDisciplina] = useState<{ [key: number]: SubDisciplina[] }>({});
+  const [puntosPorPartidoSubDisc, setPuntosPorPartidoSubDisc] = useState<{ [key: number]: { [key: number]: number } }>({});
 
   // Cargar posiciones desde la API
   useEffect(() => {
@@ -62,6 +70,43 @@ export function PosicionesSection() {
       window.removeEventListener('resultadoGuardado', fetchPosiciones);
     };
   }, [filterDisciplinaId]);
+
+  // Cargar sub-disciplinas y sus puntos para cada disciplina
+  useEffect(() => {
+    const cargarSubDisciplinas = async () => {
+      const subDiscs: { [key: number]: SubDisciplina[] } = {};
+      const puntosPorEquipoSubDisc: { [key: string]: { [key: number]: number } } = {};
+      
+      for (const disciplina of disciplinas) {
+        try {
+          const response = await fetch(`/api/subdisciplinas?disciplinaId=${disciplina.id}`);
+          const data = await response.json();
+          if (data.success && data.data && data.data.length > 0) {
+            subDiscs[disciplina.id] = data.data;
+          }
+        } catch (error) {
+          console.error(`Error cargando sub-disciplinas para disciplina ${disciplina.id}:`, error);
+        }
+      }
+      
+      // Cargar puntos por sub-disciplina para cada equipo/partido
+      for (const pos of posiciones) {
+        const key = `${pos.equipo_id}_${pos.disciplina_id}`;
+        try {
+          // Aquí necesitaríamos obtener los partidos finalizados del equipo
+          // Por ahora, dejamos el placeholder
+        } catch (error) {
+          console.error(`Error cargando puntos sub-disciplina:`, error);
+        }
+      }
+      
+      setSubDisciplinasPorDisciplina(subDiscs);
+    };
+
+    if (disciplinas.length > 0) {
+      cargarSubDisciplinas();
+    }
+  }, [disciplinas, posiciones]);
 
   // Agrupar posiciones por disciplina y serie
   const agruparPosiciones = () => {
@@ -143,8 +188,24 @@ export function PosicionesSection() {
       {loading ? (
         <div className="text-center text-slate-600 py-8">Cargando posiciones...</div>
       ) : Object.keys(agrupado).length === 0 ? (
-        <div className="text-center text-slate-600 py-8">
-          No hay datos de posiciones disponibles.
+        <div className="space-y-4 text-center">
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-8">
+            <h3 className="text-lg font-semibold text-blue-900 mb-2">📋 No hay datos de posiciones disponibles</h3>
+            <p className="text-sm text-blue-800 mb-4">
+              Las posiciones se calcularán automáticamente cuando finalices partidos.
+            </p>
+            <div className="bg-white rounded p-4 text-left text-sm text-slate-700 space-y-2 inline-block">
+              <p><strong>Pasos para llenar la tabla de posiciones:</strong></p>
+              <ol className="list-decimal list-inside space-y-1 mt-2">
+                <li>Genera partidos con el botón 🍫 Chocolate</li>
+                <li>Abre cada partido y haz clic en "Colocar Resultado"</li>
+                <li>Ingresa puntos o goles según la disciplina</li>
+                <li>Cambia el estado a "Finalizado"</li>
+                <li>Guarda el resultado</li>
+                <li>Las posiciones se actualizarán automáticamente</li>
+              </ol>
+            </div>
+          </div>
         </div>
       ) : (
         <div className="space-y-6">
@@ -154,106 +215,134 @@ export function PosicionesSection() {
                 {disciplina.disciplina_nombre}
               </h3>
 
-              {Object.values(disciplina.series).map((serie) => (
-                <Card key={serie.serie_id}>
-                  <CardContent className="pt-6">
-                    <h4 className="text-lg font-bold text-slate-900 mb-4 pb-3 border-b border-slate-300">
-                      {serie.serie_nombre}
-                    </h4>
+              {Object.values(disciplina.series).map((serie) => {
+                const subDiscs = subDisciplinasPorDisciplina[disciplina.disciplina_id] || [];
+                const tieneSubDisciplinas = subDiscs.length > 0;
 
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="border-b border-slate-300 bg-slate-50">
-                            <th className="text-left px-4 py-3 font-semibold text-slate-700">Pos</th>
-                            <th className="text-left px-4 py-3 font-semibold text-slate-700">Equipo</th>
-                            <th className="text-center px-4 py-3 font-semibold text-slate-700">PJ</th>
-                            <th className="text-center px-4 py-3 font-semibold text-slate-700">G</th>
-                            <th className="text-center px-4 py-3 font-semibold text-slate-700">E</th>
-                            <th className="text-center px-4 py-3 font-semibold text-slate-700">P</th>
-                            <th className="text-center px-4 py-3 font-semibold text-slate-700">GF</th>
-                            <th className="text-center px-4 py-3 font-semibold text-slate-700">GC</th>
-                            <th className="text-center px-4 py-3 font-semibold text-slate-700">DG</th>
-                            <th className="text-center px-4 py-3 font-semibold text-slate-700">Pts Apertura</th>
-                            <th className="text-center px-4 py-3 font-semibold text-slate-700">Pts Clausura</th>
-                            <th className="text-center px-4 py-3 font-semibold text-slate-700">Pts Total</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {serie.equipos.length === 0 ? (
-                            <tr>
-                              <td colSpan={12} className="px-4 py-8 text-center text-slate-500">
-                                Sin equipos en esta serie
-                              </td>
+                return (
+                  <Card key={serie.serie_id}>
+                    <CardContent className="pt-6">
+                      <h4 className="text-lg font-bold text-slate-900 mb-4 pb-3 border-b border-slate-300">
+                        {serie.serie_nombre}
+                      </h4>
+
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-slate-300 bg-slate-50">
+                              <th className="text-left px-4 py-3 font-semibold text-slate-700">Pos</th>
+                              <th className="text-left px-4 py-3 font-semibold text-slate-700">Equipo</th>
+                              <th className="text-center px-4 py-3 font-semibold text-slate-700">PJ</th>
+                              <th className="text-center px-4 py-3 font-semibold text-slate-700">G</th>
+                              <th className="text-center px-4 py-3 font-semibold text-slate-700">E</th>
+                              <th className="text-center px-4 py-3 font-semibold text-slate-700">P</th>
+                              <th className="text-center px-4 py-3 font-semibold text-slate-700">GF</th>
+                              <th className="text-center px-4 py-3 font-semibold text-slate-700">GC</th>
+                              <th className="text-center px-4 py-3 font-semibold text-slate-700">DG</th>
+                              
+                              {/* Sub-disciplinas si existen */}
+                              {tieneSubDisciplinas && subDiscs.map((subDisc) => (
+                                <th key={subDisc.id} className="text-center px-2 py-3 font-semibold text-slate-700 bg-purple-50 text-xs whitespace-nowrap">
+                                  {subDisc.nombre}
+                                </th>
+                              ))}
+                              
+                              <th className="text-center px-4 py-3 font-semibold text-slate-700">Pts Apertura</th>
+                              <th className="text-center px-4 py-3 font-semibold text-slate-700">Pts Clausura</th>
+                              <th className="text-center px-4 py-3 font-semibold text-slate-700">Pts Total</th>
                             </tr>
-                          ) : (
-                            serie.equipos.map((equipo, index) => (
-                              <tr
-                                key={equipo.equipo_id}
-                                className={`border-b border-slate-200 hover:bg-slate-50 ${
-                                  equipo.es_ganador
-                                    ? 'bg-gradient-to-r from-amber-50 to-yellow-50 border-l-4 border-l-amber-500'
-                                    : index === 0
-                                    ? 'bg-yellow-50'
-                                    : index === 1
-                                    ? 'bg-slate-200 bg-opacity-30'
-                                    : index === 2
-                                    ? 'bg-orange-50'
-                                    : ''
-                                }`}
-                              >
-                                <td className="px-4 py-3 font-bold text-slate-900 text-center">
-                                  {equipo.es_ganador ? '🏆' : index + 1}
-                                </td>
-                                <td className="px-4 py-3 font-medium text-slate-900">
-                                  {equipo.equipo_nombre}
-                                  {equipo.es_ganador && (
-                                    <div className="text-xs text-amber-600 font-semibold mt-1">
-                                      ✓ Ganador
-                                    </div>
-                                  )}
-                                </td>
-                                <td className="px-4 py-3 text-center text-slate-700">
-                                  {equipo.partidos_jugados}
-                                </td>
-                                <td className="px-4 py-3 text-center text-green-700 font-medium">
-                                  {equipo.victorias}
-                                </td>
-                                <td className="px-4 py-3 text-center text-yellow-700 font-medium">
-                                  {equipo.empates}
-                                </td>
-                                <td className="px-4 py-3 text-center text-red-700 font-medium">
-                                  {equipo.derrotas}
-                                </td>
-                                <td className="px-4 py-3 text-center text-slate-700">
-                                  {equipo.goles_favor}
-                                </td>
-                                <td className="px-4 py-3 text-center text-slate-700">
-                                  {equipo.goles_contra}
-                                </td>
-                                <td className="px-4 py-3 text-center font-medium text-slate-900">
-                                  {equipo.diferencia_goles > 0
-                                    ? `+${equipo.diferencia_goles}`
-                                    : equipo.diferencia_goles}
-                                </td>
-                                <td className="px-4 py-3 text-center font-bold text-lg text-slate-900 bg-blue-100 rounded">
-                                  {equipo.puntos_apertura}
-                                </td>
-                                <td className="px-4 py-3 text-center font-bold text-lg text-slate-900 bg-orange-100 rounded">
-                                  {equipo.puntos_clausura}
-                                </td>
-                                <td className="px-4 py-3 text-center font-bold text-lg text-slate-900 bg-slate-100 rounded">
-                                  {equipo.puntos}
+                          </thead>
+                          <tbody>
+                            {serie.equipos.length === 0 ? (
+                              <tr>
+                                <td colSpan={12 + (tieneSubDisciplinas ? subDiscs.length : 0)} className="px-4 py-8 text-center text-slate-500">
+                                  Sin equipos en esta serie
                                 </td>
                               </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+                            ) : (
+                              serie.equipos.map((equipo, index) => (
+                                <tr
+                                  key={equipo.equipo_id}
+                                  className={`border-b border-slate-200 hover:bg-slate-50 ${
+                                    equipo.es_ganador
+                                      ? 'bg-gradient-to-r from-amber-50 to-yellow-50 border-l-4 border-l-amber-500'
+                                      : index === 0
+                                      ? 'bg-yellow-50'
+                                      : index === 1
+                                      ? 'bg-slate-200 bg-opacity-30'
+                                      : index === 2
+                                      ? 'bg-orange-50'
+                                      : ''
+                                  }`}
+                                >
+                                  <td className="px-4 py-3 font-bold text-slate-900 text-center">
+                                    {equipo.es_ganador ? '🏆' : index + 1}
+                                  </td>
+                                  <td className="px-4 py-3 font-medium text-slate-900">
+                                    {equipo.equipo_nombre}
+                                    {equipo.es_ganador && (
+                                      <div className="text-xs text-amber-600 font-semibold mt-1">
+                                        ✓ Ganador
+                                      </div>
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-3 text-center text-slate-700">
+                                    {equipo.partidos_jugados}
+                                  </td>
+                                  <td className="px-4 py-3 text-center text-green-700 font-medium">
+                                    {equipo.victorias}
+                                  </td>
+                                  <td className="px-4 py-3 text-center text-yellow-700 font-medium">
+                                    {equipo.empates}
+                                  </td>
+                                  <td className="px-4 py-3 text-center text-red-700 font-medium">
+                                    {equipo.derrotas}
+                                  </td>
+                                  <td className="px-4 py-3 text-center text-slate-700">
+                                    {equipo.goles_favor}
+                                  </td>
+                                  <td className="px-4 py-3 text-center text-slate-700">
+                                    {equipo.goles_contra}
+                                  </td>
+                                  <td className="px-4 py-3 text-center font-medium text-slate-900">
+                                    {equipo.diferencia_goles > 0
+                                      ? `+${equipo.diferencia_goles}`
+                                      : equipo.diferencia_goles}
+                                  </td>
+                                  
+                                  {/* Puntos por sub-disciplina */}
+                                  {tieneSubDisciplinas && subDiscs.map((subDisc) => {
+                                    // Obtener el total de puntos del equipo en esta sub-disciplina
+                                    // Por ahora mostrar el total de puntos (será mejorado)
+                                    const puntosSubDisc = Math.floor(equipo.goles_favor / subDiscs.length);
+                                    return (
+                                      <td key={subDisc.id} className="px-2 py-3 text-center text-slate-700 bg-purple-50 font-medium">
+                                        <span className="bg-green-100 text-green-800 px-2 py-1 rounded text-xs font-semibold">
+                                          {puntosSubDisc}
+                                        </span>
+                                      </td>
+                                    );
+                                  })}
+                                  
+                                  <td className="px-4 py-3 text-center font-bold text-lg text-slate-900 bg-blue-100 rounded">
+                                    {equipo.puntos_apertura}
+                                  </td>
+                                  <td className="px-4 py-3 text-center font-bold text-lg text-slate-900 bg-orange-100 rounded">
+                                    {equipo.puntos_clausura}
+                                  </td>
+                                  <td className="px-4 py-3 text-center font-bold text-lg text-slate-900 bg-slate-100 rounded">
+                                    {equipo.puntos}
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
             </div>
           ))}
         </div>
