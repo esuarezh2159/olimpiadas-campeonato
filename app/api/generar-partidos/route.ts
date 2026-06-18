@@ -371,11 +371,15 @@ export async function POST(request: NextRequest) {
         // BASQUETBOL CON MATCHUPS DE FUTBITO: Recuperar TODOS los matchups de Futbito
         console.log(`🏀 BASQUETBOL: Recuperando TODOS los matchups de Futbito desde BD para la serie ${serieName}...`);
 
-        // Obtener TODOS los partidos de Futbito para esta serie en esta fecha
+        // Obtener TODOS los partidos de Futbito para esta serie en esta fecha (CON NOMBRES)
         const [futbolPartidos] = await connection.query(
-          `SELECT p.equipo1_id, p.equipo2_id, p.sitio_id, TIME_FORMAT(p.horario_inicio, '%H:%i') as horario_futbol
+          `SELECT p.equipo1_id, p.equipo2_id, 
+                  e1.nombre as equipo1_nombre, e2.nombre as equipo2_nombre,
+                  p.sitio_id, TIME_FORMAT(p.horario_inicio, '%H:%i') as horario_futbol
           FROM TblPartido p
           JOIN TblDisciplina d ON p.disciplina_id = d.id
+          JOIN TblEquipo e1 ON p.equipo1_id = e1.id
+          JOIN TblEquipo e2 ON p.equipo2_id = e2.id
           WHERE p.fecha_id = ? 
             AND p.serie_id = ?
             AND LOWER(d.nombre) = 'fulbito'
@@ -388,29 +392,29 @@ export async function POST(request: NextRequest) {
           console.log(`✓ Se recuperaron ${futbolPartidos.length} matchups de Futbito`);
           
           for (const futbolMatchup of futbolPartidos) {
-            const eq1Id = futbolMatchup.equipo1_id;
-            const eq2Id = futbolMatchup.equipo2_id;
+            const eq1NombreFutbol = futbolMatchup.equipo1_nombre;
+            const eq2NombreFutbol = futbolMatchup.equipo2_nombre;
             const horarioFutbol = futbolMatchup.horario_futbol;
             const sitioFutbolId = futbolMatchup.sitio_id;
             
-            console.log(`📍 Verificando matchup: ${eq1Id} vs ${eq2Id}...`);
+            console.log(`📍 Buscando en Basquetbol: "${eq1NombreFutbol}" vs "${eq2NombreFutbol}"...`);
             
-            // Buscar si ambos equipos existen en Basquetbol
-            const eq1Basquet = equiposMezclados.find(e => e.id === eq1Id);
-            const eq2Basquet = equiposMezclados.find(e => e.id === eq2Id);
+            // Buscar equipos por NOMBRE en Basquetbol (en la misma serie)
+            const eq1Basquet = equiposMezclados.find(e => e.nombre === eq1NombreFutbol);
+            const eq2Basquet = equiposMezclados.find(e => e.nombre === eq2NombreFutbol);
             
             if (eq1Basquet && eq2Basquet) {
-              // Ambos equipos existen - agregar al matchup
+              // Ambos equipos encontrados por nombre - agregar al matchup
               matchupsAGenerar.push({
                 eq1: eq1Basquet,
                 eq2: eq2Basquet,
                 horarioFutbol: horarioFutbol,
                 sitioFutbolId: sitioFutbolId,
               });
-              console.log(`✓ Matchup encontrado: ${eq1Basquet.id} vs ${eq2Basquet.id}`);
+              console.log(`✓ Matchup encontrado: ${eq1Basquet.id} (${eq1Basquet.nombre}) vs ${eq2Basquet.id} (${eq2Basquet.nombre})`);
             } else {
-              const equipoFaltante = !eq1Basquet ? eq1Id : eq2Id;
-              console.log(`⚠ Matchup NO encontrado en equipos de Basquetbol: ${eq1Id} vs ${eq2Id}`);
+              const equipoFaltante = !eq1Basquet ? eq1NombreFutbol : eq2NombreFutbol;
+              console.log(`⚠ Equipo NO encontrado en Basquetbol: "${equipoFaltante}"`);
             }
           }
         } else {
@@ -418,7 +422,6 @@ export async function POST(request: NextRequest) {
           console.log(`💡 FALLBACK: Generando matchups de Basquetbol independientemente...`);
           
           // Fallback: Si no hay partidos de Futbito, generar Basquetbol como una disciplina VS normal
-          // (Pero el usuario debe generar Futbito primero!)
           let matchCount = Math.floor(equiposMezclados.length / 2);
           for (let i = 0; i < matchCount; i++) {
             matchupsAGenerar.push({
@@ -534,17 +537,44 @@ export async function POST(request: NextRequest) {
           });
         }
         
-        // REGLA ESPECIAL: INVITADOS - Solo generar 1 matchup por fecha
+        // REGLA ESPECIAL: INVITADOS - Generar 1 matchup por fecha, eliminando de fechas siguientes
         if (serieName.toLowerCase() === 'invitados' && matchupsAGenerar.length > 1) {
           console.log(`\n⭐ REGLA ESPECIAL: INVITADOS con ${matchupsAGenerar.length} matchups`);
-          console.log(`   Solo generaré 1 matchup para esta fecha`);
-          console.log(`   Matchups totales: ${matchupsAGenerar.map(m => `${m.eq1.id}vs${m.eq2.id}`).join(', ')}`);
           
-          // Guardar todos los matchups para otra fecha
-          const matchupActual = matchupsAGenerar[0];
-          matchupsAGenerar = [matchupActual];
+          // Verificar si hay fechas siguientes programadas
+          const tipoActual = tipoFecha.toLowerCase();
+          const fechasDisponibles = tipoActual === 'apertura' ? fechasApertura : fechasClausura;
+          const indexActual = fechasDisponibles.findIndex(f => Number(f.id) === Number(fechaId));
+          const hayFechasSiguientes = indexActual >= 0 && indexActual < fechasDisponibles.length - 1;
           
-          console.log(`   ✓ Usando solo: ${matchupActual.eq1.id} vs ${matchupActual.eq2.id}`);
+          if (hayFechasSiguientes) {
+            console.log(`   ✓ Hay fechas siguientes programadas`);
+            console.log(`   Generaré 1 matchup en esta fecha: ${matchupsAGenerar[0].eq1.id} vs ${matchupsAGenerar[0].eq2.id}`);
+            console.log(`   Eliminaré este matchup de las fechas siguientes`);
+            
+            // Guardar el matchup que vamos a usar
+            const matchupActual = matchupsAGenerar[0];
+            matchupsAGenerar = [matchupActual];
+            
+            // Eliminar este matchup de todas las fechas siguientes para INVITADOS
+            const fechaSiguiente = indexActual + 1 < fechasDisponibles.length ? fechasDisponibles[indexActual + 1] : null;
+            if (fechaSiguiente) {
+              console.log(`   Eliminando matchup ${matchupActual.eq1.id} vs ${matchupActual.eq2.id} de Fecha ${fechaSiguiente.id} (INVITADOS)`);
+              
+              // Eliminar el partido de la fecha siguiente
+              await connection.query(
+                `DELETE FROM TblPartido 
+                 WHERE fecha_id = ? 
+                   AND disciplina_id = ? 
+                   AND serie_id = ? 
+                   AND ((equipo1_id = ? AND equipo2_id = ?) OR (equipo1_id = ? AND equipo2_id = ?))`,
+                [fechaSiguiente.id, disciplinaId, serieId, matchupActual.eq1.id, matchupActual.eq2.id, matchupActual.eq2.id, matchupActual.eq1.id]
+              );
+            }
+          } else {
+            console.log(`   ⚠️ NO hay fechas siguientes - Generaré TODOS los ${matchupsAGenerar.length} matchups en esta fecha`);
+            console.log(`   Matchups a generar: ${matchupsAGenerar.map(m => `${m.eq1.id}vs${m.eq2.id}`).join(', ')}`);
+          }
         }
         
         // Log de matchups separados
